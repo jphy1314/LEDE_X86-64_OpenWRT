@@ -1,0 +1,106 @@
+name: LEDE Builder
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Init environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install build-essential git wget unzip python3 python3-setuptools ccache subversion time rsync patch libncurses5-dev libssl-dev zlib1g-dev gawk flex bison bc
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone LEDE source
+      working-directory: /workdir
+      run: |
+        git clone -b $REPO_BRANCH $REPO_URL lede
+        ln -sf /workdir/lede $GITHUB_WORKSPACE/lede
+
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF lede/feeds.conf.default
+        chmod +x $DIY_P1_SH
+        cd lede
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    - name: Update feeds
+      run: |
+        cd lede
+        ./scripts/feeds update -a
+
+    - name: Install feeds
+      run: |
+        cd lede
+        ./scripts/feeds install -a
+
+    - name: Sanitize feeds (remove unwanted)
+      run: |
+        cd lede
+        rm -rf feeds/helloworld package/feeds/helloworld
+
+    - name: Load custom config
+      run: |
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE lede/.config
+        chmod +x $DIY_P2_SH
+        cd lede
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    - name: Force disable Rust packages
+      run: |
+        cd lede
+        sed -i 's/CONFIG_PACKAGE_shadowsocks-rust=y/# CONFIG_PACKAGE_shadowsocks-rust is not set/' .config
+        sed -i 's/CONFIG_PACKAGE_v2ray-core=y/# CONFIG_PACKAGE_v2ray-core is not set/' .config
+        sed -i 's/CONFIG_PACKAGE_xray-core=y/# CONFIG_PACKAGE_xray-core is not set/' .config
+        sed -i 's/CONFIG_PACKAGE_hysteria=y/# CONFIG_PACKAGE_hysteria is not set/' .config
+        sed -i 's/CONFIG_PACKAGE_rust=y/# CONFIG_PACKAGE_rust is not set/' .config
+
+    - name: Download packages
+      run: |
+        cd lede
+        make defconfig
+        make download -j4
+
+    - name: Compile firmware
+      run: |
+        cd lede
+        make -j1 || make -j1 V=s
+
+    - name: Organize firmware
+      run: |
+        cd lede/bin/targets
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@v3
+      with:
+        name: LEDE_firmware
+        path: ${{ env.FIRMWARE }}
