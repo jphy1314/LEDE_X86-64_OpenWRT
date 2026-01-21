@@ -21,9 +21,15 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    # -------------------------------
+    # 1. Checkout 仓库
+    # -------------------------------
     - name: Checkout
       uses: actions/checkout@v3
 
+    # -------------------------------
+    # 2. 初始化环境
+    # -------------------------------
     - name: Init environment
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -38,12 +44,18 @@ jobs:
         mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
+    # -------------------------------
+    # 3. Clone LEDE
+    # -------------------------------
     - name: Clone LEDE source
       working-directory: /workdir
       run: |
         git clone -b $REPO_BRANCH $REPO_URL lede
         ln -sf /workdir/lede $GITHUB_WORKSPACE/lede
 
+    # -------------------------------
+    # 4. Load custom feeds
+    # -------------------------------
     - name: Load custom feeds
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF lede/feeds.conf.default
@@ -51,21 +63,33 @@ jobs:
         cd lede
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
+    # -------------------------------
+    # 5. Update feeds
+    # -------------------------------
     - name: Update feeds
       run: |
         cd lede
         ./scripts/feeds update -a
 
+    # -------------------------------
+    # 6. Install feeds
+    # -------------------------------
     - name: Install feeds
       run: |
         cd lede
         ./scripts/feeds install -a
 
-    - name: Sanitize feeds (remove unwanted)
+    # -------------------------------
+    # 7. 删除不需要的 feed（如 helloworld）
+    # -------------------------------
+    - name: Sanitize feeds
       run: |
         cd lede
         rm -rf feeds/helloworld package/feeds/helloworld
 
+    # -------------------------------
+    # 8. Load custom config
+    # -------------------------------
     - name: Load custom config
       run: |
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE lede/.config
@@ -73,6 +97,9 @@ jobs:
         cd lede
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    # -------------------------------
+    # 9. Force disable Rust packages
+    # -------------------------------
     - name: Force disable Rust packages
       run: |
         cd lede
@@ -82,25 +109,37 @@ jobs:
         sed -i 's/CONFIG_PACKAGE_hysteria=y/# CONFIG_PACKAGE_hysteria is not set/' .config
         sed -i 's/CONFIG_PACKAGE_rust=y/# CONFIG_PACKAGE_rust is not set/' .config
 
+    # -------------------------------
+    # 10. 下载 packages
+    # -------------------------------
     - name: Download packages
       run: |
         cd lede
         make defconfig
         make download -j4
 
+    # -------------------------------
+    # 11. 编译固件
+    # -------------------------------
     - name: Compile firmware
       run: |
         cd lede
         make -j1 || make -j1 V=s
 
+    # -------------------------------
+    # 12. 整理固件输出目录
+    # -------------------------------
     - name: Organize firmware
       run: |
         cd lede/bin/targets
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
+    # -------------------------------
+    # 13. 上传固件 (使用 v4)
+    # -------------------------------
     - name: Upload firmware
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: LEDE_firmware
         path: ${{ env.FIRMWARE }}
