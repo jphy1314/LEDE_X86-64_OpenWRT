@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       board:
-        description: '目标板子型号 (例如: orangepi-zero3, 必须对应 H618 的具体板型)'
+        description: '目标板子型号 (例如: orangepizero3, 必须对应 H618 的具体板型)'
         required: true
         default: 'orangepizero3'
       branch:
@@ -47,7 +47,6 @@ jobs:
           repository: armbian/build
           path: armbian
 
-      # 2. 清理磁盘空间 (保留)
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -56,7 +55,6 @@ jobs:
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           sudo docker image prune --all --force
 
-      # 3. 设置缓存 (非常关键！加速第二次以后的编译)
       - name: Cache Armbian Sources
         uses: actions/cache@v4
         with:
@@ -68,35 +66,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-armbian-
 
-      # 4. 执行编译
       - name: Build Armbian Firmware
         working-directory: armbian
         run: |
-          # 映射构建类型参数
-          [ "${{ inputs.build_type }}" == "minimal" ] && BUILD_MINIMAL="yes" || BUILD_MINIMAL="no"
-          [ "${{ inputs.build_type }}" == "desktop" ] && BUILD_DESKTOP="yes" || BUILD_DESKTOP="no"
+          [ "${{ inputs.build_type }}" = "minimal" ] && BUILD_MINIMAL="yes" || BUILD_MINIMAL="no"
+          [ "${{ inputs.build_type }}" = "desktop" ] && BUILD_DESKTOP="yes" || BUILD_DESKTOP="no"
 
           echo "Starting build for ${{ inputs.board }}..."
-          
-          # H618 通常需要较新的内核，建议使用 current 或 edge
-          sudo ./compile.sh build \
-            BOARD=orangepizero3 \
-            BRANCH=edge \
-            RELEASE=bookworm
-            BUILD_MINIMAL=no \
-            BUILD_DESKTOP=yes \
-            KERNEL_CONFIGURE="no" \
-            COMPRESS_OUTPUT="img" 
 
-      # 5. 整理输出
+          sudo ./compile.sh build \
+            BOARD=${{ inputs.board }} \
+            BRANCH=${{ inputs.branch }} \
+            RELEASE=${{ inputs.release }} \
+            BUILD_MINIMAL=${BUILD_MINIMAL} \
+            BUILD_DESKTOP=${BUILD_DESKTOP} \
+            INSTALL_DOCKER=yes \
+            KERNEL_CONFIGURE="no" \
+            COMPRESS_OUTPUT="img"
+
       - name: Organize Output
         run: |
           mkdir -p upload
-          # Armbian 默认输出路径通常在 output/images
-          cp output/images/*.img* upload/ || true
-          cp output/images/*.sha* upload/ || true
+          cp armbian/output/images/*.img* upload/ || true
+          cp armbian/output/images/*.sha* upload/ || true
 
-      # 6. 上传 Artifacts
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
