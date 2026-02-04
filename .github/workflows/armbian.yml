@@ -1,0 +1,106 @@
+name: Build Armbian for H618
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: '目标板子型号 (例如: orangepi-zero3, 必须对应 H618 的具体板型)'
+        required: true
+        default: 'orangepi-zero3'
+      branch:
+        description: '内核分支 (current=稳定, edge=最新)'
+        required: true
+        default: 'current'
+        type: choice
+        options:
+          - current
+          - edge
+      release:
+        description: '发行版'
+        required: true
+        default: 'bookworm'
+        type: choice
+        options:
+          - bookworm
+          - jammy
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'server'
+        type: choice
+        options:
+          - minimal
+          - server
+          - desktop
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - name: Checkout Armbian Build Repo
+        uses: actions/checkout@v4
+        with:
+          repository: armbian/build
+          path: armbian
+
+      # 2. 清理磁盘空间 (保留)
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune --all --force
+
+      # 3. 设置缓存 (非常关键！加速第二次以后的编译)
+      - name: Cache Armbian Sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            armbian/sources
+            armbian/toolchains
+            ~/.cache/armbian
+          key: ${{ runner.os }}-armbian-${{ inputs.board }}-${{ inputs.branch }}-${{ hashFiles('armbian/compile.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-armbian-
+
+      # 4. 执行编译
+      - name: Build Armbian Firmware
+        working-directory: armbian
+        run: |
+          # 映射构建类型参数
+          [ "${{ inputs.build_type }}" == "minimal" ] && BUILD_MINIMAL="yes" || BUILD_MINIMAL="no"
+          [ "${{ inputs.build_type }}" == "desktop" ] && BUILD_DESKTOP="yes" || BUILD_DESKTOP="no"
+
+          echo "Starting build for ${{ inputs.board }}..."
+          
+          # H618 通常需要较新的内核，建议使用 current 或 edge
+          sudo ./compile.sh build \
+            BOARD="${{ inputs.board }}" \
+            BRANCH="${{ inputs.branch }}" \
+            RELEASE="${{ inputs.release }}" \
+            BUILD_MINIMAL="$BUILD_MINIMAL" \
+            BUILD_DESKTOP="$BUILD_DESKTOP" \
+            KERNEL_CONFIGURE="no" \
+            COMPRESS_OUTPUT="img" 
+
+      # 5. 整理输出
+      - name: Organize Output
+        run: |
+          mkdir -p upload
+          # Armbian 默认输出路径通常在 output/images
+          cp output/images/*.img* upload/ || true
+          cp output/images/*.sha* upload/ || true
+
+      # 6. 上传 Artifacts
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: Armbian-H618-${{ inputs.board }}-${{ inputs.branch }}
+          path: upload/*
+          if-no-files-found: error
+          retention-days: 3
