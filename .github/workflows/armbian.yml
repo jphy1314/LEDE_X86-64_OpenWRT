@@ -6,7 +6,7 @@ on:
       board:
         description: '目标板子型号 (例如: orangepi-zero3, 必须对应 H618 的具体板型)'
         required: true
-        default: 'orangepi-zero3'
+        default: 'orangepizero3'
       branch:
         description: '内核分支 (current=稳定, edge=最新)'
         required: true
