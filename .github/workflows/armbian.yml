@@ -4,13 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       board:
-        description: '目标板子型号 (例如: orangepizero3, 必须对应 H618 的具体板型)'
+        description: 'H618 支持的板型（已限制）'
         required: true
-        default: 'orangepizero3'
+        type: choice
+        default: orangepizero3
+        options:
+          - orangepizero3
+          - orangepipc
       branch:
-        description: '内核分支 (current=稳定, edge=最新)'
+        description: '内核分支'
         required: true
-        default: 'current'
+        default: current
         type: choice
         options:
           - current
@@ -18,7 +22,7 @@ on:
       release:
         description: '发行版'
         required: true
-        default: 'bookworm'
+        default: bookworm
         type: choice
         options:
           - bookworm
@@ -26,7 +30,7 @@ on:
       build_type:
         description: '构建类型'
         required: true
-        default: 'server'
+        default: server
         type: choice
         options:
           - minimal
@@ -37,7 +41,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     permissions:
-      contents: read
+      contents: write
       actions: write
 
     steps:
@@ -72,17 +76,24 @@ jobs:
           [ "${{ inputs.build_type }}" = "minimal" ] && BUILD_MINIMAL="yes" || BUILD_MINIMAL="no"
           [ "${{ inputs.build_type }}" = "desktop" ] && BUILD_DESKTOP="yes" || BUILD_DESKTOP="no"
 
+          # Desktop 强制 xfce，防止 dialog
+          if [ "${BUILD_DESKTOP}" = "yes" ]; then
+            DESKTOP_ENVIRONMENT="xfce"
+          fi
+
           echo "Starting build for ${{ inputs.board }}..."
 
-          sudo ./compile.sh build \
+          ./compile.sh build \
             BOARD=${{ inputs.board }} \
             BRANCH=${{ inputs.branch }} \
             RELEASE=${{ inputs.release }} \
             BUILD_MINIMAL=${BUILD_MINIMAL} \
             BUILD_DESKTOP=${BUILD_DESKTOP} \
+            DESKTOP_ENVIRONMENT=${DESKTOP_ENVIRONMENT:-} \
+            ENABLE_ZRAM=yes \
             INSTALL_DOCKER=yes \
-            KERNEL_CONFIGURE="no" \
-            COMPRESS_OUTPUT="img"
+            KERNEL_CONFIGURE=no \
+            COMPRESS_OUTPUT=img
 
       - name: Organize Output
         run: |
@@ -90,10 +101,19 @@ jobs:
           cp armbian/output/images/*.img* upload/ || true
           cp armbian/output/images/*.sha* upload/ || true
 
-      - name: Upload Firmware
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Armbian-H618-${{ inputs.board }}-${{ inputs.branch }}
           path: upload/*
           if-no-files-found: error
           retention-days: 3
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: armbian-${{ inputs.board }}-${{ inputs.branch }}-${{ inputs.release }}-${{ inputs.build_type }}
+          name: Armbian H618 ${{ inputs.board }} (${{ inputs.branch }})
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
