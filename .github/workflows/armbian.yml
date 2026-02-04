@@ -80,11 +80,11 @@ jobs:
           
           # H618 通常需要较新的内核，建议使用 current 或 edge
           sudo ./compile.sh build \
-            BOARD="${{ inputs.board }}" \
-            BRANCH="${{ inputs.branch }}" \
-            RELEASE="${{ inputs.release }}" \
-            BUILD_MINIMAL="$BUILD_MINIMAL" \
-            BUILD_DESKTOP="$BUILD_DESKTOP" \
+            BOARD=orangepizero3 \
+            BRANCH=edge \
+            RELEASE=bookworm
+            BUILD_MINIMAL=no \
+            BUILD_DESKTOP=yes \
             KERNEL_CONFIGURE="no" \
             COMPRESS_OUTPUT="img" 
 
