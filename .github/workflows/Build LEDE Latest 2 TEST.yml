@@ -84,7 +84,8 @@ jobs:
             ccache-lede-${{ env.REPO_BRANCH }}-
 
       - name: Load Custom Feeds (DIY Part 1)
-        run: |[ -e "diy-part1.sh" ] && chmod +x diy-part1.sh && ./diy-part1.sh || true
+        run: |
+          [ -e "diy-part1.sh" ] && chmod +x diy-part1.sh && ./diy-part1.sh || true
 
       - name: Update, Patch & Install Feeds
         working-directory: ${{ github.workspace }}/openwrt
