@@ -1,4 +1,5 @@
 name: Build LEDE Latest 2 TEST
+
 on:
   workflow_dispatch:
 
@@ -83,8 +84,7 @@ jobs:
             ccache-lede-${{ env.REPO_BRANCH }}-
 
       - name: Load Custom Feeds (DIY Part 1)
-        run: |
-          [ -e "diy-part1.sh" ] && chmod +x diy-part1.sh && ./diy-part1.sh || true
+        run: |[ -e "diy-part1.sh" ] && chmod +x diy-part1.sh && ./diy-part1.sh || true
 
       - name: Update, Patch & Install Feeds
         working-directory: ${{ github.workspace }}/openwrt
@@ -114,10 +114,8 @@ jobs:
           echo "✅ Feeds patched and installed successfully."
 
       - name: Load Custom Configuration (DIY Part 2)
-        working-directory: ${{ github.workspace }}/openwrt
         run: |
-          # 注意：这里使用 ../ 指向存放脚本的根目录
-          [ -e "../diy-part2.sh" ] && chmod +x ../diy-part2.sh && ../diy-part2.sh || true
+          [ -e "diy-part2.sh" ] && chmod +x diy-part2.sh && ./diy-part2.sh || true
 
       - name: Generate Configuration
         working-directory: ${{ github.workspace }}/openwrt
@@ -133,9 +131,6 @@ jobs:
           echo "CONFIG_IB=n" >> .config
           echo "CONFIG_KO_SYMBOLS=n" >> .config
           echo "CONFIG_BUILD_LOG=n" >> .config
-
-          # [新增] 确保 ethtool 被编译，以支持你脚本里的硬件加速命令
-          echo "CONFIG_PACKAGE_ethtool=y" >> .config
           
           # 防火墙与 Nftables 核心逻辑
           echo "CONFIG_PACKAGE_firewall=n" >> .config
@@ -180,6 +175,18 @@ jobs:
           echo "CONFIG_PACKAGE_xray-core_compress_upx=n" >> .config
           echo "CONFIG_PACKAGE_sing-box_compress_upx=n" >> .config
           
+          # --- PassWall 核心组件强制编译 ---
+          echo "CONFIG_PACKAGE_xray-core=y" >> .config
+          echo "CONFIG_PACKAGE_sing-box=y" >> .config
+          
+          # --- 针对 Intel D525 性能优化的组件 ---
+          echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
+          echo "CONFIG_PACKAGE_irqbalance=y" >> .config
+          echo "CONFIG_PACKAGE_cpufreq=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+          echo "CONFIG_DEFAULT_tcp_bbr=y" >> .config
+
           # Passwall 及其他插件
           cat >> .config <<'EOF'
           CONFIG_PACKAGE_ipv6helper=y
@@ -219,17 +226,36 @@ jobs:
         working-directory: ${{ github.workspace }}/openwrt
         run: |
           set -euo pipefail
+          echo "🔍 开始检查 PassWall 核心依赖源码..."
           MISSING_DEPS=""
           DEPS_LIST="xray-core sing-box v2ray-core v2ray-plugin naiveproxy trojan-plus tuic-client"
+          
           for dep in $DEPS_LIST; do
-            if grep -q "CONFIG_PACKAGE_$dep=y" .config; then
+            # 检查 .config 中是否启用了该依赖 (匹配 =y 或 =m)
+            if grep -E -q "CONFIG_PACKAGE_$dep=[ym]" .config; then
+              echo "➡️ 发现 .config 中已勾选: $dep"
+              # 查找 package 或 feeds 目录下是否存在该组件的源码文件夹
               if ! find package feeds -type d -name "$dep" | grep -q .; then
-                sed -i "s/CONFIG_PACKAGE_$dep=y/# CONFIG_PACKAGE_$dep is missing/" .config
+                echo "  ❌ 警告: 找不到 $dep 的源码文件夹! 正在将其从编译配置中移除..."
+                sed -i "s/CONFIG_PACKAGE_$dep=y/# CONFIG_PACKAGE_$dep is not set/" .config
+                sed -i "s/CONFIG_PACKAGE_$dep=m/# CONFIG_PACKAGE_$dep is not set/" .config
                 MISSING_DEPS="$MISSING_DEPS $dep"
+              else
+                echo "  ✅ $dep 源码目录已就绪."
               fi
+            else
+              echo "  ℹ️ 未勾选或未作为核心依赖: $dep (将被跳过)"
             fi
           done
-          [ -n "$MISSING_DEPS" ] && make defconfig || true
+          
+          # 注意：if和[之间必须有空格，这里已修正
+          if[ -n "$MISSING_DEPS" ]; then
+            echo "⚠️ 检测到缺失依赖: $MISSING_DEPS"
+            echo "⚙️ 正在重新运行 make defconfig 修正配置..."
+            make defconfig
+          else
+            echo "🎉 所有已选的 PassWall 依赖检查通过!"
+          fi
 
       - name: Download package
         working-directory: ${{ github.workspace }}/openwrt
@@ -249,10 +275,10 @@ jobs:
           ccache --set-config=max_size=50G
           make -j$(nproc) || make -j1 V=s
           
+          # 注意：if和[之间必须有空格，这里已修正
           if [ -d "bin/targets" ]; then
              echo "status=success" >> $GITHUB_OUTPUT
-             grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-             [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_Generic" >> $GITHUB_ENV
+             grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME[ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_Generic" >> $GITHUB_ENV
              echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
           else
              exit 1
