@@ -133,6 +133,9 @@ jobs:
           echo "CONFIG_IB=n" >> .config
           echo "CONFIG_KO_SYMBOLS=n" >> .config
           echo "CONFIG_BUILD_LOG=n" >> .config
+
+          # [新增] 确保 ethtool 被编译，以支持你脚本里的硬件加速命令
+          echo "CONFIG_PACKAGE_ethtool=y" >> .config
           
           # 防火墙与 Nftables 核心逻辑
           echo "CONFIG_PACKAGE_firewall=n" >> .config
