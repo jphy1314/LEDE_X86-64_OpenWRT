@@ -114,8 +114,10 @@ jobs:
           echo "✅ Feeds patched and installed successfully."
 
       - name: Load Custom Configuration (DIY Part 2)
+        working-directory: ${{ github.workspace }}/openwrt
         run: |
-          [ -e "diy-part2.sh" ] && chmod +x diy-part2.sh && ./diy-part2.sh || true
+          # 注意：这里使用 ../ 指向存放脚本的根目录
+          [ -e "../diy-part2.sh" ] && chmod +x ../diy-part2.sh && ../diy-part2.sh || true
 
       - name: Generate Configuration
         working-directory: ${{ github.workspace }}/openwrt
