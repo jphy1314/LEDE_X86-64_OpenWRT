@@ -91,26 +91,8 @@ jobs:
         working-directory: ${{ github.workspace }}/openwrt
         run: |
           ./scripts/feeds update -a
-          
-          # Passwall 处理
-          rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-          rm -rf feeds/luci/applications/luci-app-passwall
-          git clone https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
-          git clone https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
-
-          # SmartDNS 修复
-          rm -rf feeds/packages/net/smartdns
-          rm -rf feeds/luci/applications/luci-app-smartdns
-          git clone --depth 1 https://github.com/pymumu/openwrt-smartdns.git package/smartdns
-          git clone --depth 1 https://github.com/pymumu/luci-app-smartdns.git package/luci-app-smartdns
-          sed -i 's|../../lang/rust|../../feeds/packages/lang/rust|g' package/smartdns/Makefile
-
-          # Argon Theme
-          rm -rf feeds/luci/themes/luci-theme-argon
-          rm -rf feeds/luci/applications/luci-app-argon-config
-          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/community/luci-theme-argon
-          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git package/community/luci-app-argon-config
-          
+          # 说明：Passwall、SmartDNS 等已通过 diy-part1.sh 脚本在 feeds.conf 中定义
+          # 这样可以避免在 YAML 中重复 clone 导致包定义冲突
           ./scripts/feeds install -a
           echo "✅ Feeds patched and installed successfully."
 
@@ -232,30 +214,25 @@ jobs:
           DEPS_LIST="xray-core sing-box v2ray-core v2ray-plugin naiveproxy trojan-plus tuic-client"
           
           for dep in $DEPS_LIST; do
-            # 检查 .config 中是否启用了该依赖 (匹配 =y 或 =m)
+            # 检查 .config 中是否启用了该依赖
             if grep -E -q "CONFIG_PACKAGE_$dep=[ym]" .config; then
               echo "➡️ 发现 .config 中已勾选: $dep"
-              # 查找 package 或 feeds 目录下是否存在该组件的源码文件夹
+              # 查找源码文件夹
               if ! find package feeds -type d -name "$dep" | grep -q .; then
-                echo "  ❌ 警告: 找不到 $dep 的源码文件夹! 正在将其从编译配置中移除..."
+                echo "  ❌ 警告: 找不到 $dep 的源码文件夹! 正在移除配置..."
                 sed -i "s/CONFIG_PACKAGE_$dep=y/# CONFIG_PACKAGE_$dep is not set/" .config
                 sed -i "s/CONFIG_PACKAGE_$dep=m/# CONFIG_PACKAGE_$dep is not set/" .config
                 MISSING_DEPS="$MISSING_DEPS $dep"
               else
                 echo "  ✅ $dep 源码目录已就绪."
               fi
-            else
-              echo "  ℹ️ 未勾选或未作为核心依赖: $dep (将被跳过)"
             fi
           done
           
-          # 注意：if和[之间必须有空格，这里已修正
-          if[ -n "$MISSING_DEPS" ]; then
-            echo "⚠️ 检测到缺失依赖: $MISSING_DEPS"
-            echo "⚙️ 正在重新运行 make defconfig 修正配置..."
+          # 修正 if 空格
+          if [ -n "$MISSING_DEPS" ]; then
+            echo "⚠️ 检测到缺失依赖: $MISSING_DEPS，重新运行 make defconfig"
             make defconfig
-          else
-            echo "🎉 所有已选的 PassWall 依赖检查通过!"
           fi
 
       - name: Download package
@@ -270,16 +247,19 @@ jobs:
         working-directory: ${{ github.workspace }}/openwrt
         run: |
           mkdir -p ${{ env.CCACHE_DIR }}
-          rm -rf .ccache && ln -s ${{ env.CCACHE_DIR }} .ccache
+          [ -L .ccache ] && rm .ccache
+          [ -d .ccache ] && rm -rf .ccache
+          ln -s ${{ env.CCACHE_DIR }} .ccache
           export CCACHE_BASEDIR=$PWD
           ccache -z
-          ccache --set-config=max_size=50G
+          ccache --set-config=max_size=10G
           make -j$(nproc) || make -j1 V=s
           
-          # 注意：if和[之间必须有空格，这里已修正
+          # 修正 if 空格和符号逻辑
           if [ -d "bin/targets" ]; then
              echo "status=success" >> $GITHUB_OUTPUT
-             grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME[ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_Generic" >> $GITHUB_ENV
+             grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+             [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_Generic" >> $GITHUB_ENV
              echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
           else
              exit 1
