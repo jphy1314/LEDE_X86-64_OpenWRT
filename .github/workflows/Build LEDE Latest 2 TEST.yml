@@ -210,6 +210,7 @@ jobs:
           echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
           echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
           echo "CONFIG_DEFAULT_tcp_bbr=y" >> .config
+          echo "CONFIG_KERNEL_PRINTK=n" >> .config
           echo "CONFIG_PACKAGE_ethtool=y" >> .config
           
           # Passwall 及其他插件
