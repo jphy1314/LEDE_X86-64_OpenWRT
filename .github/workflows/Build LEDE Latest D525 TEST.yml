@@ -1,4 +1,4 @@
-name: Build LEDE Latest TEST
+name: Build LEDE Latest D525 TEST
 on:
   workflow_dispatch:
 
