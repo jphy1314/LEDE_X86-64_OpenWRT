@@ -205,6 +205,9 @@ jobs:
 
           # --- 针对 Intel D525 性能优化的组件 ---
           echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
+          # 👇 修复 WireGuard/Curve25519 在 6.12 内核中缺失 kpp.ko 的致命报错
+          echo "CONFIG_PACKAGE_kmod-crypto-kpp=y" >> .config
+          
           echo "CONFIG_PACKAGE_irqbalance=y" >> .config
           echo "CONFIG_PACKAGE_cpufreq=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
