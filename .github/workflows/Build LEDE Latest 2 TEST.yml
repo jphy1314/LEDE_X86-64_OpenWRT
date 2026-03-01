@@ -1,5 +1,4 @@
-name: Build LEDE Latest 2 TEST
-
+name: Build LEDE Latest TEST
 on:
   workflow_dispatch:
 
@@ -63,55 +62,84 @@ jobs:
           sudo apt-get autoremove --purge -y
           sudo apt-get clean
           sudo timedatectl set-timezone "$TZ"
-          # 统一在主目录下操作，不再额外建立 build 文件夹，减少路径复杂度
-          mkdir -p "${{ github.workspace }}/openwrt"
 
       - name: Clone Source Code
+        working-directory: ${{ github.workspace }}
         run: |
+          # 直接在当前工作区拉取源码，自动生成 openwrt 文件夹
           git clone -b $REPO_BRANCH --single-branch --depth 1 $REPO_URL openwrt
 
+      # 1. 生成动态时间戳 (日期级别)
       - name: Get Date
         id: get-date
         run: |
           echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
+      # 2. [关键优化] Ccache 缓存策略
       - name: Cache ccache
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
+          # Key: os - branch - date
           key: ccache-lede-${{ env.REPO_BRANCH }}-${{ steps.get-date.outputs.date }}
+          # Restore keys: 允许回退到同一分支的旧缓存
           restore-keys: |
             ccache-lede-${{ env.REPO_BRANCH }}-
 
       - name: Load Custom Feeds (DIY Part 1)
         run: |
-          [ -e "../diy-part1.sh" ] && chmod +x ../diy-part1.sh && ../diy-part1.sh || true
+          [ -e "${{ github.workspace }}/diy-part1.sh" ] && \
+          chmod +x "${{ github.workspace }}/diy-part1.sh" && \
+          cd openwrt && "${{ github.workspace }}/diy-part1.sh" || true
 
       - name: Update, Patch & Install Feeds
         working-directory: ${{ github.workspace }}/openwrt
         run: |
           ./scripts/feeds update -a
-          # 说明：Passwall、SmartDNS 等已通过 diy-part1.sh 脚本在 feeds.conf 中定义
-          # 这样可以避免在 YAML 中重复 clone 导致包定义冲突
+          
+          # Passwall 处理
+          rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+          rm -rf feeds/luci/applications/luci-app-passwall
+          git clone https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
+          git clone https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
+
+          # SmartDNS 修复
+          rm -rf feeds/packages/net/smartdns
+          rm -rf feeds/luci/applications/luci-app-smartdns
+          git clone --depth 1 https://github.com/pymumu/openwrt-smartdns.git package/smartdns
+          git clone --depth 1 https://github.com/pymumu/luci-app-smartdns.git package/luci-app-smartdns
+          # 更安全的 sed（先备份）
+          cp package/smartdns/Makefile package/smartdns/Makefile.bak
+          sed -i 's|../../lang/rust|../../feeds/packages/lang/rust|g' package/smartdns/Makefile
+
+          # Argon Theme
+          rm -rf feeds/luci/themes/luci-theme-argon
+          rm -rf feeds/luci/applications/luci-app-argon-config
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/community/luci-theme-argon
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git package/community/luci-app-argon-config
+          
           ./scripts/feeds install -a
+
           echo "✅ Feeds patched and installed successfully."
 
       - name: Load Custom Configuration (DIY Part 2)
-        working-directory: ${{ github.workspace }}/openwrt
         run: |
-          # 脚本在 openwrt 的上一级目录，所以用 ../ 访问
-          if [ -e "../diy-part2.sh" ]; then
-            chmod +x ../diy-part2.sh
-            # 在 openwrt 目录下执行上一级的脚本
-            ../diy-part2.sh
-          fi
+          [ -e "${{ github.workspace }}/diy-part2.sh" ] && \
+          chmod +x "${{ github.workspace }}/diy-part2.sh" && \
+          cd openwrt && "${{ github.workspace }}/diy-part2.sh" || true
 
       - name: Generate Configuration
         working-directory: ${{ github.workspace }}/openwrt
         run: |
-          # 1. 预设配置
+          # -------------------------------------------------------
+          # [核心逻辑修复] 1. 预设配置
+          # -------------------------------------------------------
+          
+          # 必须开启 DEVEL，否则 CCACHE 会被 defconfig 删除
           echo "CONFIG_DEVEL=y" >> .config
           echo "CONFIG_CCACHE=y" >> .config
+          
+          # 关闭调试信息
           echo "CONFIG_DEBUG=n" >> .config
           echo "CONFIG_DEBUG_INFO=n" >> .config
           echo "CONFIG_COLLECT_KERNEL_DEBUG=n" >> .config
@@ -121,14 +149,21 @@ jobs:
           echo "CONFIG_KO_SYMBOLS=n" >> .config
           echo "CONFIG_BUILD_LOG=n" >> .config
           
-          # 防火墙与 Nftables 核心逻辑
+          # -------------------------------------------------------
+          # [核心修复区] 防火墙共存与透明代理内核模块
+          # -------------------------------------------------------
+          # 弃用原生 iptables 和 fw3，启用 fw4 和 nftables
           echo "CONFIG_PACKAGE_firewall=n" >> .config
           echo "CONFIG_PACKAGE_iptables=n" >> .config
           echo "CONFIG_PACKAGE_libiptc=n" >> .config
           echo "CONFIG_PACKAGE_firewall4=y" >> .config
           echo "CONFIG_PACKAGE_nftables=y" >> .config
+          
+          # 启用 iptables 到 nftables 的兼容桥梁 (非常重要，使得 iptables 命令能继续工作)
           echo "CONFIG_PACKAGE_iptables-nft=y" >> .config
           echo "CONFIG_PACKAGE_ip6tables-nft=y" >> .config
+          
+          # 补齐 Nftables 的底层内核模块 (解决 netlink error 的关键 1)
           echo "CONFIG_PACKAGE_kmod-nft-core=y" >> .config
           echo "CONFIG_PACKAGE_kmod-nft-nat=y" >> .config
           echo "CONFIG_PACKAGE_kmod-nft-offload=y" >> .config
@@ -136,6 +171,8 @@ jobs:
           echo "CONFIG_PACKAGE_kmod-nft-socket=y" >> .config
           echo "CONFIG_PACKAGE_kmod-nft-fib=y" >> .config
           echo "CONFIG_PACKAGE_kmod-nft-dict=y" >> .config
+
+          # 补齐 Iptables 兼容模式的底层内核模块 (解决 netlink error 的关键 2)
           echo "CONFIG_PACKAGE_iptables-mod-tproxy=y" >> .config
           echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
           echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
@@ -145,10 +182,12 @@ jobs:
           echo "CONFIG_PACKAGE_kmod-ipt-extra=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
+          
+          # 补齐 ipset (Passwall 在 Iptables 模式下分流需要)
           echo "CONFIG_PACKAGE_ipset=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ipt-ipset=y" >> .config
 
-          # Dnsmasq-full 逻辑
+          # Dnsmasq (同时开启 ipset 和 nftset 支持，兼顾双模式)
           echo "CONFIG_PACKAGE_dnsmasq=n" >> .config
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
@@ -157,17 +196,13 @@ jobs:
           echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
           echo "CONFIG_PACKAGE_dnsmasq_full_noid=y" >> .config
           echo "CONFIG_PACKAGE_dnsmasq_full_nftset=y" >> .config
-          
-          # UPX 禁用
+         
+          # UPX Disable
           echo "CONFIG_XRAY_CORE_COMPRESS_UPX=n" >> .config
           echo "CONFIG_SING_BOX_COMPRESS_UPX=n" >> .config
           echo "CONFIG_PACKAGE_xray-core_compress_upx=n" >> .config
           echo "CONFIG_PACKAGE_sing-box_compress_upx=n" >> .config
-          
-          # --- PassWall 核心组件强制编译 ---
-          echo "CONFIG_PACKAGE_xray-core=y" >> .config
-          echo "CONFIG_PACKAGE_sing-box=y" >> .config
-          
+
           # --- 针对 Intel D525 性能优化的组件 ---
           echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
           echo "CONFIG_PACKAGE_irqbalance=y" >> .config
@@ -175,12 +210,12 @@ jobs:
           echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
           echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
           echo "CONFIG_DEFAULT_tcp_bbr=y" >> .config
-
+          
           # Passwall 及其他插件
           cat >> .config <<'EOF'
           CONFIG_PACKAGE_ipv6helper=y
           CONFIG_PACKAGE_luci-app-passwall=y
-
+          
           # 👇 明确让 Passwall 同时包含这两种代理模式
           CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Iptables=y
           CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Nftables=y
@@ -207,12 +242,22 @@ jobs:
           CONFIG_LUCI_THEME="argon"
           EOF
           
-          # 目标硬件选择
+          # Target selection
           echo "CONFIG_TARGET_x86=y" >> .config
           echo "CONFIG_TARGET_x86_64=y" >> .config
           echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
           
           make defconfig
+          
+          # 2. 补救措施 
+          echo "🔍 Verifying .config for CCACHE..."
+          if ! grep -q "CONFIG_CCACHE=y" .config; then
+              echo "⚠️ CCACHE was stripped by defconfig! Restoring..."
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_CCACHE=y" >> .config
+          else
+              echo "✅ CCACHE is enabled."
+          fi
 
       - name: Check PassWall Dependencies
         working-directory: ${{ github.workspace }}/openwrt
@@ -227,6 +272,7 @@ jobs:
               if find package feeds -type d -name "$dep" | grep -q .; then
                 FOUND=1
               fi
+              # 已修复：补充 if 和 [ 之间的空格
               if [ "$FOUND" -eq 0 ]; then
                 echo "⚠️ $dep enabled but missing in trees."
                 sed -i "s/CONFIG_PACKAGE_$dep=y/# CONFIG_PACKAGE_$dep is missing/" .config
@@ -236,45 +282,103 @@ jobs:
               fi
             fi
           done
+          # 已修复：补充 if 和 [ 之间的空格
           if [ -n "$MISSING_DEPS" ]; then
-            make defconfig
-          fi
-          
-          # 修正 if 空格
-          if [ -n "$MISSING_DEPS" ]; then
-            echo "⚠️ 检测到缺失依赖: $MISSING_DEPS，重新运行 make defconfig"
             make defconfig
           fi
 
       - name: Download package
         working-directory: ${{ github.workspace }}/openwrt
         run: |
+          mkdir -p dl
+          echo "⬇️ Starting parallel download..."
+          # 1. 尝试并发下载，允许失败 (|| true)，因为网络波动是正常的
           make download -j8 || true
-          find dl -size -1024c -exec rm -f {} \;
+
+          echo "🧹 Cleaning up small/invalid files..."
+          # 2. 关键优化：删除小于 1KB 的文件
+          find dl -size -1024c -exec ls -l {} \; -exec rm -f {} \;
+
+          echo "⬇️ Final single-thread verification..."
+          # 3. 单线程下载并检查，移除 || true
           make download -j1 V=s
 
       - name: Compile the firmware
         id: compile
         working-directory: ${{ github.workspace }}/openwrt
         run: |
+          # ----------------------------------------------------------------------
+          #[终极修复] 3. 编译前最后检查与软链接
+          # ----------------------------------------------------------------------
+          
+          # 1. 再次强制检查 .config
+          if ! grep -q "CONFIG_CCACHE=y" .config; then
+              echo "⚠️ WARNING: CONFIG_CCACHE is NOT enabled! Force enabling..."
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_CCACHE=y" >> .config
+          fi
+          
+          # 2. 准备外部缓存目录
           mkdir -p ${{ env.CCACHE_DIR }}
-          [ -L .ccache ] && rm .ccache
-          [ -d .ccache ] && rm -rf .ccache
+          chmod -R 777 ${{ env.CCACHE_DIR }}
+          
+          # 3. 建立软链接 (Symlink Trick)
+          rm -rf .ccache
           ln -s ${{ env.CCACHE_DIR }} .ccache
-          export CCACHE_BASEDIR=$PWD
+          echo "✅ Symlink created: .ccache -> ${{ env.CCACHE_DIR }}"
+          
+          # 4. 环境变量辅助 (路径更新为纯 openwrt)
+          export CCACHE_BASEDIR=${{ github.workspace }}/openwrt
+          export CCACHE_SLOPPINESS=include_file_ctime,time_macros
+          export CCACHE_COMPILERCHECK=content
+          
+          # 5. 初始化配置
           ccache -z
-          ccache --set-config=max_size=10G
+          ccache --set-config=max_size=50G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          
+          echo "👇 Ccache Config:"
+          ccache -p
+          
+          echo "Processing thread count: $(nproc)"
+          echo "🚀 Starting Main Build..."
+          
+          # 6. 开始编译
           make -j$(nproc) || make -j1 V=s
           
-          # 修正 if 空格和符号逻辑
-          if [ -d "bin/targets" ]; then
-             echo "status=success" >> $GITHUB_OUTPUT
-             grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-             [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_Generic" >> $GITHUB_ENV
-             echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+          # 7. 统计结果
+          echo "📊 Ccache Statistics (After Build):"
+          ccache -s
+          
+          # 8. 检查缓存大小
+          CACHE_SIZE=$(du -sh ${{ env.CCACHE_DIR }} | cut -f1)
+          echo "ℹ️ Final Cache Directory Size: $CACHE_SIZE"
+          
+          # 已修复：补充 if 和 [ 之间的空格
+          if [ -d "bin/targets" ] && [ "$(ls -A bin/targets)" ]; then
+              echo "✅ Compile success!"
+              echo "status=success" >> $GITHUB_OUTPUT
           else
-             exit 1
+              echo "❌ Compile failed. No firmware found."
+              echo "status=failed" >> $GITHUB_OUTPUT
+              exit 1
           fi
+          
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_Generic" >> $GITHUB_ENV
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+      - name: Check space usage
+        if: (!cancelled())
+        run: df -hT
+
+      - name: Upload bin directory
+        uses: actions/upload-artifact@main
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+        with:
+          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: openwrt/bin
 
       - name: Organize files
         id: organize
@@ -286,7 +390,7 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware directory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@main
         if: steps.organize.outputs.status == 'success' && !cancelled()
         with:
           name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
@@ -301,7 +405,7 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@master
         if: steps.tag.outputs.status == 'success' && !cancelled()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -310,7 +414,7 @@ jobs:
           body_path: release.txt
           files: ${{ env.FIRMWARE }}/*
 
-      - name: Delete old workflow runs
+      - name: Delete workflow runs
         uses: Mattraks/delete-workflow-runs@main
         with:
           retain_days: 0
