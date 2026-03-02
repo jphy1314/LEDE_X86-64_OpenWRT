@@ -216,8 +216,6 @@ jobs:
           echo "CONFIG_PACKAGE_irqbalance=y" >> .config
           echo "CONFIG_PACKAGE_cpufreq=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-          echo "CONFIG_DEFAULT_tcp_bbr=y" >> .config
           
           # Passwall 及其他插件
           cat >> .config <<'EOF'
